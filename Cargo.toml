@@ -1,11 +1,11 @@
 [package]
-name = "acme-lib"
-description = "Library for requesting certificates from an ACME provider."
+name = "acme-v2"
+description = "Library for requesting certificates from an ACME V2 provider."
 license = "MIT"
-repository = "https://github.com/algesten/acme-lib"
+repository = "https://github.com/luizfonseca/acme-v2"
 readme = "README.md"
 version = "0.9.1"
-authors = ["Martin Algesten <martin@algesten.se>"]
+authors = ["Luiz Fonseca <eu@luiz.cc>", "Martin Algesten <martin@algesten.se>"]
 keywords = ["letsencrypt", "acme"]
 categories = ["web-programming", "api-bindings"]
 edition = "2018"
