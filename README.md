@@ -12,9 +12,9 @@ This library is a fork of [acme-lib](https://github.com/algesten/acme-lib) while
 ## Example
 
 ```rust
-use acme_lib::{Error, Directory, DirectoryUrl};
-use acme_lib::persist::FilePersist;
-use acme_lib::create_p384_key;
+use acme_v2::{Error, Directory, DirectoryUrl};
+use acme_v2::persist::FilePersist;
+use acme_v2::create_p384_key;
 
 fn request_cert() -> Result<(), Error> {
 

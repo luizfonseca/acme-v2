@@ -66,9 +66,9 @@ impl<P: Persist> Auth<P> {
     /// The challenge will be accessed over HTTP (not HTTPS), for obvious reasons.
     ///
     /// ```no_run
-    /// use acme_lib::persist::Persist;
-    /// use acme_lib::order::Auth;
-    /// use acme_lib::Error;
+    /// use acme_v2::persist::Persist;
+    /// use acme_v2::order::Auth;
+    /// use acme_v2::Error;
     /// use std::fs::File;
     /// use std::io::Write;
     ///
@@ -103,9 +103,9 @@ impl<P: Persist> Auth<P> {
     /// The <proof> contains the signed token proving this account update it.
     ///
     /// ```no_run
-    /// use acme_lib::persist::Persist;
-    /// use acme_lib::order::Auth;
-    /// use acme_lib::Error;
+    /// use acme_v2::persist::Persist;
+    /// use acme_v2::order::Auth;
+    /// use acme_v2::Error;
     ///
     /// fn dns_authorize<P: Persist>(auth: &Auth<P>) -> Result<(), Error> {
     ///   let challenge = auth.dns_challenge();
