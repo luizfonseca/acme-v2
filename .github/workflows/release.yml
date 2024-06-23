@@ -1,0 +1,44 @@
+name: Release
+on:
+    push:
+        branches:
+        - master
+
+jobs:
+  release:
+    name: Release
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release
+        id: release
+        uses: google-github-actions/release-please-action@v4
+        with:
+          release-type: rust
+
+  publish-cargo:
+    continue-on-error: true
+    name: Publish to crates.io
+    needs:
+        - release
+    if: ${{ needs.release.outputs.release_created }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag_name }}
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
