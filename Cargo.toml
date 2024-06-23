@@ -25,6 +25,6 @@ ureq = "2"
 
 [dev-dependencies]
 env_logger = { version = "0.11.3", default-features = false }
-futures = "0.1.25"
+futures = "0.3.30"
 hyper = "0.12"
 regex = "1.3"
