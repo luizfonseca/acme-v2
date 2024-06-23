@@ -310,7 +310,8 @@ impl<P: Persist> CertOrder<P> {
         debug!("Save certificate: {}", pk_crt);
         persist.put(&pk_crt, cert.as_bytes())?;
 
-        Ok(Certificate::new(pkey_pem.to_string(), cert))
+        // TODO add chain
+        Ok(Certificate::new(pkey_pem.to_string(), cert, vec![]))
     }
 
     /// Access the underlying JSON object for debugging.

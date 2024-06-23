@@ -7,12 +7,17 @@ use openssl::rsa::Rsa;
 use openssl::stack::Stack;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509Req, X509ReqBuilder, X509};
+use time::macros::format_description;
 
 use crate::Result;
 
 lazy_static! {
     pub(crate) static ref EC_GROUP_P256: EcGroup = ec_group(Nid::X9_62_PRIME256V1);
     pub(crate) static ref EC_GROUP_P384: EcGroup = ec_group(Nid::SECP384R1);
+
+    pub(self) static ref TIME_FORMAT: &'static [time::format_description::BorrowedFormatItem<'static>] = format_description!(
+        "[month repr:short] [day padding:none] [hour padding:zero]:[minute padding:zero]:[second padding:zero] [year] GMT"
+    );
 }
 
 fn ec_group(nid: Nid) -> EcGroup {
@@ -77,13 +82,15 @@ pub(crate) fn create_csr(pkey: &PKey<pkey::Private>, domains: &[&str]) -> Result
 pub struct Certificate {
     private_key: String,
     certificate: String,
+    chain: Vec<String>,
 }
 
 impl Certificate {
-    pub(crate) fn new(private_key: String, certificate: String) -> Self {
+    pub(crate) fn new(private_key: String, certificate: String, chain: Vec<String>) -> Self {
         Certificate {
             private_key,
             certificate,
+            chain,
         }
     }
 
@@ -101,6 +108,10 @@ impl Certificate {
     /// The PEM encoded issued certificate.
     pub fn certificate(&self) -> &str {
         &self.certificate
+    }
+
+    pub fn chain(&self) -> &Vec<String> {
+        &self.chain
     }
 
     /// The issued certificate as DER.
@@ -130,24 +141,30 @@ impl Certificate {
         // Display trait produces this format, which is kinda dumb.
         // Apr 19 08:48:46 2019 GMT
         let expires = parse_date(&not_after);
-        let dur = expires - time::now();
+        let dur = expires - time::OffsetDateTime::now_utc();
 
-        dur.num_days()
+        dur.whole_days()
     }
 }
 
-fn parse_date(s: &str) -> time::Tm {
+fn parse_date(s: &str) -> time::OffsetDateTime {
     debug!("Parse date/time: {}", s);
-    time::strptime(s, "%h %e %H:%M:%S %Y %Z").expect("strptime")
+
+    time::PrimitiveDateTime::parse(s, &TIME_FORMAT)
+        .expect("OffsetDateTime")
+        .assume_utc()
 }
 
 #[cfg(test)]
 mod test {
+    use time::macros::datetime;
+
     use super::*;
 
     #[test]
     fn test_parse_date() {
-        let x = parse_date("May  3 07:40:15 2019 GMT");
-        assert_eq!(time::strftime("%F %T", &x).unwrap(), "2019-05-03 07:40:15");
+        let x = parse_date("May 3 07:40:15 2019 GMT");
+
+        assert_eq!(x, datetime!(2019-05-03 07:40:15 +00:00));
     }
 }

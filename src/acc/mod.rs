@@ -99,7 +99,8 @@ impl<P: Persist> Account<P> {
             .and_then(|s| String::from_utf8(s).ok());
 
         Ok(match (private_key, certificate) {
-            (Some(k), Some(c)) => Some(Certificate::new(k, c)),
+            // TODO: add chain
+            (Some(k), Some(c)) => Some(Certificate::new(k, c, vec![])),
             _ => None,
         })
     }
@@ -134,6 +135,7 @@ impl<P: Persist> Account<P> {
 
         let res = self.inner.transport.call(new_order_url, &order)?;
         let order_url = req_expect_header(&res, "location")?;
+
         let api_order: ApiOrder = read_json(res)?;
 
         let order = Order::new(&self.inner, api_order, order_url);

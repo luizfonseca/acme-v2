@@ -67,6 +67,7 @@ pub(crate) fn req_handle_error(
     Err(problem)
 }
 
+/// Extract a header from a response.
 pub(crate) fn req_expect_header(res: &ureq::Response, name: &str) -> ReqResult<String> {
     res.header(name)
         .map(|v| v.to_string())
