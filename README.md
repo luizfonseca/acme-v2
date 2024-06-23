@@ -1,9 +1,13 @@
-# acme-lib
+# acme-v2
 
-acme-lib is a library for accessing ACME (Automatic Certificate Management Environment)
+acme-v2 is a library for accessing ACME (Automatic Certificate Management Environment)
 services such as [Let's Encrypt](https://letsencrypt.org/).
-
 Uses ACME v2 to issue/renew certificates.
+
+## Forked from acme-lib
+
+This library is a fork of [acme-lib](https://github.com/algesten/acme-lib) while addressing some of the issues that were not addressed in the original library.
+
 
 ## Example
 
