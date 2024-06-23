@@ -78,9 +78,7 @@ fn api_order_of(res: ureq::Response, _want_status: &str) -> Result<ApiOrder> {
 // our test rig requires the order to be in `want_status`
 fn api_order_of(res: ureq::Response, want_status: &str) -> Result<ApiOrder> {
     let s = res.into_string()?;
-    #[allow(clippy::trivial_regex)]
-    let re = regex::Regex::new("<STATUS>").unwrap();
-    let b = re.replace_all(&s, want_status).to_string();
+    let b = s.replace("<STATUS>", want_status);
     let api_order: ApiOrder = serde_json::from_str(&b)?;
     Ok(api_order)
 }

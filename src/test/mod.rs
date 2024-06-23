@@ -1,18 +1,13 @@
-#![allow(clippy::trivial_regex)]
+use rouille::{Request, Response, Server};
 
-use futures::Future;
-use hyper::{service::service_fn_ok, Body, Method, Request, Response, Server};
-use lazy_static::lazy_static;
-use std::net::TcpListener;
+use std::sync::mpsc::Sender;
 use std::thread;
-
-lazy_static! {
-    static ref RE_URL: regex::Regex = regex::Regex::new("<URL>").unwrap();
-}
 
 pub struct TestServer {
     pub dir_url: String,
-    shutdown: Option<futures::sync::oneshot::Sender<()>>,
+    shutdown: Option<Sender<()>>,
+    #[allow(dead_code)]
+    handle: thread::JoinHandle<()>,
 }
 
 impl Drop for TestServer {
@@ -21,8 +16,12 @@ impl Drop for TestServer {
     }
 }
 
-fn get_directory(url: &str) -> Response<Body> {
-    const BODY: &str = r#"{
+fn json_response(body: &str) -> Response {
+    Response::from_data("application/jose+json", body).with_status_code(200)
+}
+
+fn get_directory(url: &str) -> Response {
+    let body = r#"{
     "keyChange": "<URL>/acme/key-change",
     "newAccount": "<URL>/acme/new-acct",
     "newNonce": "<URL>/acme/new-nonce",
@@ -34,22 +33,21 @@ fn get_directory(url: &str) -> Response<Body> {
         ]
     }
     }"#;
-    Response::new(Body::from(RE_URL.replace_all(BODY, url)))
+
+    let body = body.replace("<URL>", url);
+
+    json_response(&body)
 }
 
-fn head_new_nonce() -> Response<Body> {
-    Response::builder()
-        .status(204)
-        .header(
-            "Replay-Nonce",
-            "8_uBBV3N2DBRJczhoiB46ugJKUkUHxGzVe6xIMpjHFM",
-        )
-        .body(Body::empty())
-        .unwrap()
+fn head_new_nonce() -> Response {
+    Response::empty_204().with_additional_header(
+        "replay-nonce",
+        "8_uBBV3N2DBRJczhoiB46ugJKUkUHxGzVe6xIMpjHFM",
+    )
 }
 
-fn post_new_acct(url: &str) -> Response<Body> {
-    const BODY: &str = r#"{
+fn post_new_acct(url: &str) -> Response {
+    let body = r#"{
     "id": 7728515,
     "key": {
         "use": "sig",
@@ -66,16 +64,13 @@ fn post_new_acct(url: &str) -> Response<Body> {
     "createdAt": "2018-12-31T17:15:40.399104457Z",
     "status": "valid"
     }"#;
-    let location: String = RE_URL.replace_all("<URL>/acme/acct/7728515", url).into();
-    Response::builder()
-        .status(201)
-        .header("Location", location)
-        .body(Body::from(BODY))
-        .unwrap()
+    let location: String = "<URL>/acme/acct/7728515".replace("<URL>", url);
+
+    json_response(body).with_additional_header("Location", location)
 }
 
-fn post_new_order(url: &str) -> Response<Body> {
-    const BODY: &str = r#"{
+fn post_new_order(url: &str) -> Response {
+    let body = r#"{
     "status": "pending",
     "expires": "2019-01-09T08:26:43.570360537Z",
     "identifiers": [
@@ -89,18 +84,14 @@ fn post_new_order(url: &str) -> Response<Body> {
     ],
     "finalize": "<URL>/acme/finalize/7738992/18234324"
     }"#;
-    let location: String = RE_URL
-        .replace_all("<URL>/acme/order/YTqpYUthlVfwBncUufE8", url)
-        .into();
-    Response::builder()
-        .status(201)
-        .header("Location", location)
-        .body(Body::from(RE_URL.replace_all(BODY, url)))
-        .unwrap()
+
+    let location: String = "<URL>/acme/order/YTqpYUthlVfwBncUufE8".replace("<URL>", url);
+    let body = body.replace("<URL>", url);
+    json_response(&body).with_additional_header("Location", location)
 }
 
-fn post_get_order(url: &str) -> Response<Body> {
-    const BODY: &str = r#"{
+fn post_get_order(url: &str) -> Response {
+    let body = r#"{
     "status": "<STATUS>",
     "expires": "2019-01-09T08:26:43.570360537Z",
     "identifiers": [
@@ -115,12 +106,14 @@ fn post_get_order(url: &str) -> Response<Body> {
     "finalize": "<URL>/acme/finalize/7738992/18234324",
     "certificate": "<URL>/acme/cert/fae41c070f967713109028"
     }"#;
-    let b = RE_URL.replace_all(BODY, url).to_string();
-    Response::builder().status(200).body(Body::from(b)).unwrap()
+
+    let body = body.replace("<URL>", url);
+
+    json_response(&body)
 }
 
-fn post_authz(url: &str) -> Response<Body> {
-    const BODY: &str = r#"{
+fn post_authz(url: &str) -> Response {
+    let body = r#"{
         "identifier": {
             "type": "dns",
             "value": "acmetest.algesten.se"
@@ -148,63 +141,51 @@ fn post_authz(url: &str) -> Response<Body> {
         }
         ]
     }"#;
-    Response::builder()
-        .status(201)
-        .body(Body::from(RE_URL.replace_all(BODY, url)))
-        .unwrap()
+
+    let body = body.replace("<URL>", url);
+
+    json_response(&body).with_status_code(201)
 }
 
-fn post_finalize(_url: &str) -> Response<Body> {
-    Response::builder().status(200).body(Body::empty()).unwrap()
+fn post_finalize(_url: &str) -> Response {
+    Response::empty_204().with_status_code(200)
 }
 
-fn post_certificate(_url: &str) -> Response<Body> {
-    Response::builder()
-        .status(200)
-        .body("CERT HERE".into())
-        .unwrap()
+fn post_certificate(_url: &str) -> Response {
+    Response::text("CERT HERE")
+        .with_status_code(200)
+        .with_additional_header("Link", "link-to-chain-cert")
 }
 
-fn route_request(req: Request<Body>, url: &str) -> Response<Body> {
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/directory") => get_directory(url),
-        (&Method::HEAD, "/acme/new-nonce") => head_new_nonce(),
-        (&Method::POST, "/acme/new-acct") => post_new_acct(url),
-        (&Method::POST, "/acme/new-order") => post_new_order(url),
-        (&Method::POST, "/acme/order/YTqpYUthlVfwBncUufE8") => post_get_order(url),
-        (&Method::POST, "/acme/authz/YTqpYUthlVfwBncUufE8IRWLMSRqcSs") => post_authz(url),
-        (&Method::POST, "/acme/finalize/7738992/18234324") => post_finalize(url),
-        (&Method::POST, "/acme/cert/fae41c070f967713109028") => post_certificate(url),
-        (_, _) => Response::builder().status(404).body(Body::empty()).unwrap(),
+fn route_request(req: &Request) -> Response {
+    println!("Called with {:?}", req);
+    let base_url = &format!("http://{}", &req.header("Host").unwrap_or("default"));
+
+    match (req.method(), req.url().as_str()) {
+        ("GET", "/directory") => get_directory(base_url),
+        ("HEAD", "/acme/new-nonce") => head_new_nonce(),
+        ("POST", "/acme/new-acct") => post_new_acct(base_url),
+        ("POST", "/acme/new-order") => post_new_order(base_url),
+        ("POST", "/acme/order/YTqpYUthlVfwBncUufE8") => post_get_order(base_url),
+        ("POST", "/acme/authz/YTqpYUthlVfwBncUufE8IRWLMSRqcSs") => post_authz(base_url),
+        ("POST", "/acme/finalize/7738992/18234324") => post_finalize(base_url),
+        ("POST", "/acme/cert/fae41c070f967713109028") => post_certificate(base_url),
+        (_, _) => Response::empty_404(),
     }
 }
 
 pub fn with_directory_server() -> TestServer {
-    let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = tcp.local_addr().unwrap().port();
+    let server = Server::new("127.0.0.1:0", |request| route_request(request)).unwrap();
 
-    let url = format!("http://127.0.0.1:{}", port);
-    let dir_url = format!("{}/directory", url);
+    let base_url = format!("http://127.0.0.1:{}", server.server_addr().port());
+    let dir_url = format!("{}/directory", base_url);
 
-    let make_service = move || {
-        let url2 = url.clone();
-        service_fn_ok(move |req| route_request(req, &url2))
-    };
-    let server = Server::from_tcp(tcp).unwrap().serve(make_service);
-
-    let (tx, rx) = futures::sync::oneshot::channel::<()>();
-
-    let graceful = server
-        .with_graceful_shutdown(rx)
-        .map_err(|err| eprintln!("server error: {}", err));
-
-    thread::spawn(move || {
-        hyper::rt::run(graceful);
-    });
+    let (handle, sender) = server.stoppable();
 
     TestServer {
         dir_url,
-        shutdown: Some(tx),
+        shutdown: Some(sender),
+        handle,
     }
 }
 
