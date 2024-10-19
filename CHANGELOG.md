@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/luizfonseca/acme-v2/compare/v0.9.2...v0.9.3) (2024-10-19)
+
+
+### Bug Fixes
+
+* use day padding:space or padding:none when parsing cert dates ([bfcf0b8](https://github.com/luizfonseca/acme-v2/commit/bfcf0b87c6c6d19cee423c370b350aedf381c47f))
+
 ## 0.9.2 (2024-06-23)
 
 
