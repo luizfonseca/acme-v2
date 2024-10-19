@@ -7,7 +7,7 @@ use openssl::rsa::Rsa;
 use openssl::stack::Stack;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509Req, X509ReqBuilder, X509};
-use time::macros::format_description;
+use time::format_description;
 
 use crate::Result;
 
@@ -15,9 +15,8 @@ lazy_static! {
     pub(crate) static ref EC_GROUP_P256: EcGroup = ec_group(Nid::X9_62_PRIME256V1);
     pub(crate) static ref EC_GROUP_P384: EcGroup = ec_group(Nid::SECP384R1);
 
-    pub(self) static ref TIME_FORMAT: &'static [time::format_description::BorrowedFormatItem<'static>] = format_description!(
-        "[month repr:short] [day padding:none] [hour padding:zero]:[minute padding:zero]:[second padding:zero] [year] GMT"
-    );
+    pub(self) static ref TIME_FORMAT: time::format_description::OwnedFormatItem = format_description::parse_owned::<2>(
+      "[month repr:short] [ first [[day padding:none]]  [[day padding:space]] ] [hour padding:zero]:[minute padding:zero]:[second padding:zero] [year] GMT").unwrap();
 }
 
 fn ec_group(nid: Nid) -> EcGroup {
@@ -128,7 +127,7 @@ impl Certificate {
     ///
     /// It is possible to get negative days for an expired certificate.
     pub fn valid_days_left(&self) -> i64 {
-        // the cert used in the tests is not valid to load as x509
+        // When running test_download_and_save_cert, the certificate is not a valid x509
         if cfg!(test) {
             return 89;
         }
@@ -148,10 +147,8 @@ impl Certificate {
 }
 
 fn parse_date(s: &str) -> time::OffsetDateTime {
-    debug!("Parse date/time: {}", s);
-
     time::PrimitiveDateTime::parse(s, &TIME_FORMAT)
-        .expect("OffsetDateTime")
+        .expect(format!("OffsetDateTime: '{}'", s).as_str())
         .assume_utc()
 }
 
@@ -166,5 +163,12 @@ mod test {
         let x = parse_date("May 3 07:40:15 2019 GMT");
 
         assert_eq!(x, datetime!(2019-05-03 07:40:15 +00:00));
+    }
+
+    #[test]
+    fn test_parse_date_extra_space() {
+        let x = parse_date("Sep  6 23:30:55 2024 GMT");
+
+        assert_eq!(x, datetime!(2024-09-06 23:30:55 +00:00));
     }
 }
