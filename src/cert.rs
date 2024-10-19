@@ -15,6 +15,7 @@ lazy_static! {
     pub(crate) static ref EC_GROUP_P256: EcGroup = ec_group(Nid::X9_62_PRIME256V1);
     pub(crate) static ref EC_GROUP_P384: EcGroup = ec_group(Nid::SECP384R1);
 
+    // https://time-rs.github.io/book/api/format-description.html
     pub(self) static ref TIME_FORMAT: time::format_description::OwnedFormatItem = format_description::parse_owned::<2>(
       "[month repr:short] [ first [[day padding:none]]  [[day padding:space]] ] [hour padding:zero]:[minute padding:zero]:[second padding:zero] [year] GMT").unwrap();
 }
