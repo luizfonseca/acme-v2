@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::{Error, Result};
 
@@ -107,12 +107,12 @@ impl MemoryPersist {
 
 impl Persist for MemoryPersist {
     fn put(&self, key: &PersistKey, value: &[u8]) -> Result<()> {
-        let mut lock = self.inner.lock().unwrap();
+        let mut lock = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         lock.insert(key.to_string(), value.to_owned());
         Ok(())
     }
     fn get(&self, key: &PersistKey) -> Result<Option<Vec<u8>>> {
-        let lock = self.inner.lock().unwrap();
+        let lock = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         Ok(lock.get(&key.to_string()).cloned())
     }
 }

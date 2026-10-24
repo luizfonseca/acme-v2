@@ -229,7 +229,7 @@ impl<P: Persist> CsrOrder<P> {
         let csr = create_csr(&private_key, &domains)?;
 
         // this is not the same as PEM.
-        let csr_der = csr.to_der().expect("to_der()");
+        let csr_der = csr.to_der()?;
         let csr_enc = base64url(&csr_der);
         let finalize = ApiFinalize { csr: csr_enc };
 
@@ -288,8 +288,13 @@ impl<P: Persist> CertOrder<P> {
     /// [`Account::certificate`]: ../struct.Account.html#method.certificate
     pub fn download_and_save_cert(self) -> Result<Certificate> {
         //
-        let primary_name = self.order.api_order.domains()[0].to_string();
-        let url = self.order.api_order.certificate.expect("certificate url");
+        let domains = self.order.api_order.domains();
+        let primary_name = domains
+            .first()
+            .ok_or("the order has no domain")?
+            .to_string();
+        let url = (self.order.api_order.certificate)
+            .ok_or("the order is valid, but has no certificate to download")?;
         let inner = self.order.inner;
         let realm = &inner.realm[..];
 
@@ -298,7 +303,7 @@ impl<P: Persist> CertOrder<P> {
         // save key and cert into persistence
         let persist = &inner.persist;
         let pk_key = PersistKey::new(realm, PersistKind::PrivateKey, &primary_name);
-        let pkey_pem_bytes = self.private_key.private_key_to_pem_pkcs8().expect("to_pem");
+        let pkey_pem_bytes = self.private_key.private_key_to_pem_pkcs8()?;
         let pkey_pem = String::from_utf8_lossy(&pkey_pem_bytes);
         debug!("Save private key: {}", pk_key);
         persist.put(&pk_key, &pkey_pem_bytes)?;
@@ -347,7 +352,7 @@ mod test {
         let ord = acc.new_order("acmetest.example.com", &[])?;
         // shortcut auth
         let ord = CsrOrder { order: ord.order };
-        let pkey = cert::create_p256_key();
+        let pkey = cert::create_p256_key()?;
         let _ord = ord.finalize_pkey(pkey, 1)?;
         Ok(())
     }
@@ -363,7 +368,7 @@ mod test {
 
         // shortcut auth
         let ord = CsrOrder { order: ord.order };
-        let pkey = cert::create_p256_key();
+        let pkey = cert::create_p256_key()?;
         let ord = ord.finalize_pkey(pkey, 1)?;
 
         let cert = ord.download_and_save_cert()?;

@@ -8,7 +8,6 @@ use crate::Result;
 use crate::acc::AccountInner;
 use crate::acc::AcmeKey;
 use crate::api::{ApiAuth, ApiChallenge, ApiEmptyObject, ApiEmptyString};
-use crate::jwt::*;
 use crate::persist::Persist;
 use crate::util::{base64url, read_json};
 
@@ -73,7 +72,7 @@ impl<P: Persist> Auth<P> {
     /// use std::io::Write;
     ///
     /// fn web_authorize<P: Persist>(auth: &Auth<P>) -> Result<(), Error> {
-    ///   let challenge = auth.http_challenge();
+    ///   let challenge = auth.http_challenge()?;
     ///   // Assuming our web server's root is under /var/www
     ///   let path = {
     ///     let token = challenge.http_token();
@@ -85,11 +84,11 @@ impl<P: Persist> Auth<P> {
     ///   Ok(())
     /// }
     /// ```
-    pub fn http_challenge(&self) -> Challenge<P, Http> {
+    pub fn http_challenge(&self) -> Result<Challenge<P, Http>> {
         self.api_auth
             .http_challenge()
             .map(|c| Challenge::new(&self.inner, c.clone(), &self.auth_url))
-            .expect("http-challenge")
+            .ok_or_else(|| format!("no http-01 challenge for {}", self.domain_name()).into())
     }
 
     /// Get the dns challenge.
@@ -108,7 +107,7 @@ impl<P: Persist> Auth<P> {
     /// use acme_v2::Error;
     ///
     /// fn dns_authorize<P: Persist>(auth: &Auth<P>) -> Result<(), Error> {
-    ///   let challenge = auth.dns_challenge();
+    ///   let challenge = auth.dns_challenge()?;
     ///   let record = format!("_acme-challenge.{}.", auth.domain_name());
     ///   // route_53_set_record(&record, "TXT", challenge.dns_proof());
     ///   challenge.validate(5000)?;
@@ -117,11 +116,11 @@ impl<P: Persist> Auth<P> {
     /// ```
     ///
     /// The dns proof is not the same as the http proof.
-    pub fn dns_challenge(&self) -> Challenge<P, Dns> {
+    pub fn dns_challenge(&self) -> Result<Challenge<P, Dns>> {
         self.api_auth
             .dns_challenge()
             .map(|c| Challenge::new(&self.inner, c.clone(), &self.auth_url))
-            .expect("dns-challenge")
+            .ok_or_else(|| format!("no dns-01 challenge for {}", self.domain_name()).into())
     }
 
     /// Get the TLS ALPN challenge.
@@ -131,11 +130,11 @@ impl<P: Persist> Auth<P> {
     /// must contain a single dNSName SAN containing the domain being
     /// validated, as well as an ACME extension containing the SHA256 of the
     /// key authorization.
-    pub fn tls_alpn_challenge(&self) -> Challenge<P, TlsAlpn> {
+    pub fn tls_alpn_challenge(&self) -> Result<Challenge<P, TlsAlpn>> {
         self.api_auth
             .tls_alpn_challenge()
             .map(|c| Challenge::new(&self.inner, c.clone(), &self.auth_url))
-            .expect("tls-alpn-challenge")
+            .ok_or_else(|| format!("no tls-alpn-01 challenge for {}", self.domain_name()).into())
     }
 
     /// Access the underlying JSON object for debugging. We don't
@@ -261,11 +260,7 @@ impl<P: Persist, A> Challenge<P, A> {
 }
 
 fn key_authorization(token: &str, key: &AcmeKey, extra_sha256: bool) -> String {
-    let jwk: Jwk = key.into();
-    let jwk_thumb: JwkThumb = (&jwk).into();
-    let jwk_json = serde_json::to_string(&jwk_thumb).expect("jwk_thumb");
-    let digest = base64url(&sha256(jwk_json.as_bytes()));
-    let key_auth = format!("{}.{}", token, digest);
+    let key_auth = format!("{}.{}", token, key.thumbprint());
     if extra_sha256 {
         base64url(&sha256(key_auth.as_bytes()))
     } else {
@@ -306,13 +301,36 @@ mod test {
         assert!(authz.len() == 1);
         let auth = &authz[0];
         {
-            let http = auth.http_challenge();
+            let http = auth.http_challenge()?;
             assert!(http.need_validate());
         }
         {
-            let dns = auth.dns_challenge();
+            let dns = auth.dns_challenge()?;
             assert!(dns.need_validate());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_challenges_not_offered_are_errors() -> Result<()> {
+        let server = crate::test::with_directory_server();
+        let url = DirectoryUrl::Other(&server.dir_url);
+        let dir = Directory::from_url(MemoryPersist::new(), url)?;
+        let acc = dir.account("foo@bar.com")?;
+        let ord = acc.new_order("acmetest.example.com", &[])?;
+        let auth = &ord.authorizations()?[0];
+
+        // As Let's Encrypt offers wildcard names: DNS-01 only
+        let mut api_auth = auth.api_auth.clone();
+        api_auth.challenges.retain(|c| c._type == "dns-01");
+        let wildcard = super::Auth::new(&auth.inner, api_auth, &auth.auth_url);
+        assert!(wildcard.dns_challenge().is_ok());
+        let err = wildcard.http_challenge().err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "no http-01 challenge for acmetest.algesten.se"
+        );
+        assert!(wildcard.tls_alpn_challenge().is_err());
         Ok(())
     }
 }

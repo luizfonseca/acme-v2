@@ -53,7 +53,7 @@
 //!     // certificate for:
 //!     //
 //!     // http://mydomain.io/.well-known/acme-challenge/<token>
-//!     let chall = auths[0].http_challenge();
+//!     let chall = auths[0].http_challenge()?;
 //!
 //!     // The token is the filename.
 //!     let token = chall.http_token();
@@ -83,7 +83,7 @@
 //! // Ownership is proven. Create a private key for
 //! // the certificate. These are provided for convenience, you
 //! // can provide your own keypair instead if you want.
-//! let pkey_pri = create_p384_key();
+//! let pkey_pri = create_p384_key()?;
 //!
 //! // Submit the CSR. This causes the ACME provider to enter a
 //! // state of "processing" that must be polled until the

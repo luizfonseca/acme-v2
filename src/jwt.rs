@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-use crate::acc::AcmeKey;
-use crate::cert::EC_GROUP_P256;
+use openssl::ec::EcKeyRef;
+use openssl::pkey::Private;
+use openssl::sha::sha256;
+
+use crate::Result;
+use crate::cert::p256;
 use crate::util::base64url;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -56,23 +60,29 @@ pub(crate) struct JwkThumb {
     y: String,
 }
 
-impl From<&AcmeKey> for Jwk {
-    fn from(a: &AcmeKey) -> Self {
-        let mut ctx = openssl::bn::BigNumContext::new().expect("BigNumContext");
-        let mut x = openssl::bn::BigNum::new().expect("BigNum");
-        let mut y = openssl::bn::BigNum::new().expect("BigNum");
-        a.private_key()
-            .public_key()
-            .affine_coordinates_gfp(&EC_GROUP_P256, &mut x, &mut y, &mut ctx)
-            .expect("affine_coordinates_gfp");
-        Jwk {
+impl Jwk {
+    /// The public part of an account key
+    pub(crate) fn of(key: &EcKeyRef<Private>) -> Result<Jwk> {
+        let mut ctx = openssl::bn::BigNumContext::new()?;
+        let mut x = openssl::bn::BigNum::new()?;
+        let mut y = openssl::bn::BigNum::new()?;
+        let group = p256()?;
+        key.public_key()
+            .affine_coordinates_gfp(&group, &mut x, &mut y, &mut ctx)?;
+        Ok(Jwk {
             alg: "ES256".into(),
             kty: "EC".into(),
             crv: "P-256".into(),
             _use: "sig".into(),
             x: base64url(&x.to_vec()),
             y: base64url(&y.to_vec()),
-        }
+        })
+    }
+
+    /// Its thumbprint (RFC 7638), which challenges' proofs end with
+    pub(crate) fn thumbprint(&self) -> Result<String> {
+        let json = serde_json::to_string(&JwkThumb::from(self))?;
+        Ok(base64url(&sha256(json.as_bytes())))
     }
 }
 

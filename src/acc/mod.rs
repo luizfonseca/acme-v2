@@ -64,8 +64,9 @@ impl<P: Persist> Account<P> {
     /// Private key for this account.
     ///
     /// The key is an elliptic curve private key.
-    pub fn acme_private_key_pem(&self) -> String {
-        String::from_utf8(self.inner.transport.acme_key().to_pem()).expect("from_utf8")
+    pub fn acme_private_key_pem(&self) -> Result<String> {
+        let pem = self.inner.transport.acme_key().to_pem()?;
+        Ok(String::from_utf8_lossy(&pem).into_owned())
     }
 
     /// Get an already issued and [downloaded] certificate.
@@ -150,7 +151,7 @@ impl<P: Persist> Account<P> {
     /// [`certificate`]: struct.Account.html#method.certificate
     pub fn revoke_certificate(&self, cert: &Certificate, reason: RevocationReason) -> Result<()> {
         // convert to base64url of the DER (which is not PEM).
-        let certificate = base64url(&cert.certificate_der());
+        let certificate = base64url(&cert.certificate_der()?);
 
         let revoc = ApiRevocation {
             certificate,
