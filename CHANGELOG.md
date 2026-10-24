@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/luizfonseca/acme-v2/compare/v0.9.4...v1.0.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* return errors instead of panicking, and stop polling after 5 minutes ([#8](https://github.com/luizfonseca/acme-v2/issues/8))
+
+### Bug Fixes
+
+* return errors instead of panicking, and stop polling after 5 minutes ([#8](https://github.com/luizfonseca/acme-v2/issues/8)) ([104fcd1](https://github.com/luizfonseca/acme-v2/commit/104fcd1fbc3905cfaa2f77f80a720d22daeef52e))
+
 ## [0.9.4](https://github.com/luizfonseca/acme-v2/compare/v0.9.3...v0.9.4) (2026-10-24)
 
 
