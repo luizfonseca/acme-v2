@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::acc::AcmeKey;
 use crate::jwt::*;
-use crate::req::{req_expect_header, req_handle_error, req_head, req_post};
+use crate::req::{req_expect_header, req_handle_error, req_head, req_header, req_post, Response};
 use crate::util::base64url;
 use crate::Result;
 
@@ -43,12 +43,12 @@ impl Transport {
     }
 
     /// Make call using the full jwk. Only for the first newAccount request.
-    pub fn call_jwk<T: Serialize + ?Sized>(&self, url: &str, body: &T) -> Result<ureq::Response> {
+    pub fn call_jwk<T: Serialize + ?Sized>(&self, url: &str, body: &T) -> Result<Response> {
         self.do_call(url, body, jws_with_jwk)
     }
 
     /// Make call using the key id
-    pub fn call<T: Serialize + ?Sized>(&self, url: &str, body: &T) -> Result<ureq::Response> {
+    pub fn call<T: Serialize + ?Sized>(&self, url: &str, body: &T) -> Result<Response> {
         self.do_call(url, body, jws_with_kid)
     }
 
@@ -57,7 +57,7 @@ impl Transport {
         url: &str,
         body: &T,
         make_body: F,
-    ) -> Result<ureq::Response> {
+    ) -> Result<Response> {
         // The ACME API may at any point invalidate all nonces. If we detect such an
         // error, we loop until the server accepts the nonce.
         loop {
@@ -112,14 +112,12 @@ impl NoncePool {
         }
     }
 
-    fn extract_nonce(&self, res: &std::result::Result<ureq::Response, ureq::Error>) {
-        let res = match res {
-            Ok(res) => res,
-            Err(ureq::Error::Status(_, res)) => res,
-            Err(ureq::Error::Transport(_)) => return,
+    fn extract_nonce(&self, res: &std::result::Result<Response, ureq::Error>) {
+        let Ok(res) = res else {
+            return;
         };
 
-        if let Some(nonce) = res.header("replay-nonce") {
+        if let Some(nonce) = req_header(res, "replay-nonce") {
             trace!("Extract nonce");
             let mut pool = self.pool.lock().unwrap();
             pool.push_back(nonce.to_string());
@@ -142,8 +140,7 @@ impl NoncePool {
 
         let res = match res {
             Ok(res) => res,
-            Err(ureq::Error::Status(_, res)) => res,
-            Err(ureq::Error::Transport(_)) => {
+            Err(_) => {
                 return Err(crate::Error::ApiProblem(crate::api::ApiProblem {
                     _type: "httpReqError".into(),
                     detail: Some("Transport error".into()),
