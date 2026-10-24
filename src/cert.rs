@@ -1,4 +1,5 @@
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
+
 use openssl::ec::{Asn1Flag, EcGroup, EcKey};
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
@@ -6,19 +7,20 @@ use openssl::pkey::{self, PKey};
 use openssl::rsa::Rsa;
 use openssl::stack::Stack;
 use openssl::x509::extension::SubjectAlternativeName;
-use openssl::x509::{X509Req, X509ReqBuilder, X509};
+use openssl::x509::{X509, X509Req, X509ReqBuilder};
 use time::format_description;
 
 use crate::Result;
 
-lazy_static! {
-    pub(crate) static ref EC_GROUP_P256: EcGroup = ec_group(Nid::X9_62_PRIME256V1);
-    pub(crate) static ref EC_GROUP_P384: EcGroup = ec_group(Nid::SECP384R1);
+pub(crate) static EC_GROUP_P256: LazyLock<EcGroup> =
+    LazyLock::new(|| ec_group(Nid::X9_62_PRIME256V1));
+pub(crate) static EC_GROUP_P384: LazyLock<EcGroup> = LazyLock::new(|| ec_group(Nid::SECP384R1));
 
-    // https://time-rs.github.io/book/api/format-description.html
-    pub(self) static ref TIME_FORMAT: time::format_description::OwnedFormatItem = format_description::parse_owned::<2>(
-      "[month repr:short] [ first [[day padding:none]]  [[day padding:space]] ] [hour padding:zero]:[minute padding:zero]:[second padding:zero] [year] GMT").unwrap();
-}
+// https://time-rs.github.io/book/api/format-description.html
+static TIME_FORMAT: LazyLock<time::format_description::OwnedFormatItem> = LazyLock::new(|| {
+    format_description::parse_owned::<2>(
+      "[month repr:short] [ first [[day padding:none]]  [[day padding:space]] ] [hour padding:zero]:[minute padding:zero]:[second padding:zero] [year] GMT").unwrap()
+});
 
 fn ec_group(nid: Nid) -> EcGroup {
     let mut g = EcGroup::from_curve_name(nid).expect("EcGroup");
@@ -38,13 +40,13 @@ pub fn create_rsa_key(bits: u32) -> PKey<pkey::Private> {
 
 /// Make a P-256 private key (from which we can derive a public key).
 pub fn create_p256_key() -> PKey<pkey::Private> {
-    let pri_key_ec = EcKey::generate(&*EC_GROUP_P256).expect("EcKey");
+    let pri_key_ec = EcKey::generate(&EC_GROUP_P256).expect("EcKey");
     PKey::from_ec_key(pri_key_ec).expect("from_ec_key")
 }
 
 /// Make a P-384 private key pair (from which we can derive a public key).
 pub fn create_p384_key() -> PKey<pkey::Private> {
-    let pri_key_ec = EcKey::generate(&*EC_GROUP_P384).expect("EcKey");
+    let pri_key_ec = EcKey::generate(&EC_GROUP_P384).expect("EcKey");
     PKey::from_ec_key(pri_key_ec).expect("from_ec_key")
 }
 
@@ -149,7 +151,7 @@ impl Certificate {
 
 fn parse_date(s: &str) -> time::OffsetDateTime {
     time::PrimitiveDateTime::parse(s, &TIME_FORMAT)
-        .expect(format!("OffsetDateTime: '{}'", s).as_str())
+        .unwrap_or_else(|_| panic!("OffsetDateTime: '{}'", s))
         .assume_utc()
 }
 

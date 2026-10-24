@@ -11,11 +11,11 @@ authors = [
 ]
 keywords = ["letsencrypt", "acme"]
 categories = ["web-programming", "api-bindings"]
-edition = "2018"
+edition = "2024"
+rust-version = "1.88"
 
 [dependencies]
 base64 = "0.22.1"
-lazy_static = "1"
 log = "0.4"
 openssl = "0.10"
 serde = { version = "1", features = ["derive"] }

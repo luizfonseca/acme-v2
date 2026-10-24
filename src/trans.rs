@@ -4,11 +4,11 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::Result;
 use crate::acc::AcmeKey;
 use crate::jwt::*;
-use crate::req::{req_expect_header, req_handle_error, req_head, req_header, req_post, Response};
+use crate::req::{Response, req_expect_header, req_handle_error, req_head, req_header, req_post};
 use crate::util::base64url;
-use crate::Result;
 
 /// JWS payload and nonce handling for requests to the API.
 ///
@@ -145,7 +145,7 @@ impl NoncePool {
                     _type: "httpReqError".into(),
                     detail: Some("Transport error".into()),
                     subproblems: None,
-                }))
+                }));
             }
         };
 

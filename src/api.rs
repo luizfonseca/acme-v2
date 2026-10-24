@@ -5,8 +5,8 @@
 #![allow(non_camel_case_types)]
 
 use serde::{
-    ser::{SerializeMap, Serializer},
     Deserialize, Serialize,
+    ser::{SerializeMap, Serializer},
 };
 
 /// Serializes to `""`

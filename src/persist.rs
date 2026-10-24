@@ -161,12 +161,13 @@ impl Persist for FilePersist {
 
     fn get(&self, key: &PersistKey) -> Result<Option<Vec<u8>>> {
         let f_name = file_name_of(&self.dir, key);
-        let ret = if let Ok(mut file) = fs::File::open(f_name) {
-            let mut v = vec![];
-            file.read_to_end(&mut v)?;
-            Some(v)
-        } else {
-            None
+        let ret = match fs::File::open(f_name) {
+            Ok(mut file) => {
+                let mut v = vec![];
+                file.read_to_end(&mut v)?;
+                Some(v)
+            }
+            _ => None,
         };
         Ok(ret)
     }

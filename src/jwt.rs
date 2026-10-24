@@ -63,7 +63,7 @@ impl From<&AcmeKey> for Jwk {
         let mut y = openssl::bn::BigNum::new().expect("BigNum");
         a.private_key()
             .public_key()
-            .affine_coordinates_gfp(&*EC_GROUP_P256, &mut x, &mut y, &mut ctx)
+            .affine_coordinates_gfp(&EC_GROUP_P256, &mut x, &mut y, &mut ctx)
             .expect("affine_coordinates_gfp");
         Jwk {
             alg: "ES256".into(),

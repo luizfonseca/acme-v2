@@ -1,4 +1,4 @@
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
 use crate::api::ApiProblem;
 
@@ -8,10 +8,10 @@ const TIMEOUT_DURATION: std::time::Duration = std::time::Duration::from_secs(30)
 
 pub(crate) type Response = ureq::http::Response<ureq::Body>;
 
-lazy_static! {
-    /// TLS with the system's OpenSSL and root certificates. Statuses come back as responses,
-    /// and become problems in `req_handle_error`.
-    static ref AGENT: ureq::Agent = ureq::Agent::config_builder()
+/// TLS with the system's OpenSSL and root certificates. Statuses come back as responses,
+/// and become problems in `req_handle_error`.
+static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT_DURATION))
         .http_status_as_error(false)
         .tls_config(
@@ -21,8 +21,8 @@ lazy_static! {
                 .build(),
         )
         .build()
-        .into();
-}
+        .into()
+});
 
 pub(crate) fn req_get(url: &str) -> Result<Response, ureq::Error> {
     let req = AGENT.get(url);
@@ -54,7 +54,7 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
                 _type: "httpReqError".into(),
                 detail: Some("Transport error".into()),
                 subproblems: None,
-            })
+            });
         }
     };
 
@@ -65,8 +65,7 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
             _type: "problemJsonFail".into(),
             detail: Some(format!(
                 "Failed to deserialize application/problem+json ({}) body: {}",
-                e.to_string(),
-                body
+                e, body
             )),
             subproblems: None,
         })

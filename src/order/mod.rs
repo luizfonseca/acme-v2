@@ -22,12 +22,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::Result;
 use crate::acc::AccountInner;
 use crate::api::{ApiAuth, ApiEmptyString, ApiFinalize, ApiOrder};
-use crate::cert::{create_csr, Certificate};
+use crate::cert::{Certificate, create_csr};
 use crate::persist::{Persist, PersistKey, PersistKind};
 use crate::util::{base64url, read_json};
-use crate::Result;
 
 mod auth;
 
