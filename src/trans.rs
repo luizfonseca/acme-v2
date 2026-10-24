@@ -7,7 +7,10 @@ use std::sync::{Arc, Mutex};
 use crate::Result;
 use crate::acc::AcmeKey;
 use crate::jwt::*;
-use crate::req::{Response, req_expect_header, req_handle_error, req_head, req_header, req_post};
+use crate::req::{
+    Response, req_expect_header, req_handle_error, req_head, req_header, req_post,
+    req_transport_problem,
+};
 use crate::util::base64url;
 
 /// JWS payload and nonce handling for requests to the API.
@@ -140,13 +143,7 @@ impl NoncePool {
 
         let res = match res {
             Ok(res) => res,
-            Err(_) => {
-                return Err(crate::Error::ApiProblem(crate::api::ApiProblem {
-                    _type: "httpReqError".into(),
-                    detail: Some("Transport error".into()),
-                    subproblems: None,
-                }));
-            }
+            Err(err) => return Err(req_transport_problem(&err).into()),
         };
 
         Ok(req_expect_header(&res, "replay-nonce")?)

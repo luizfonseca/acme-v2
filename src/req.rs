@@ -49,13 +49,7 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
         // ok responses pass through
         Ok(res) if res.status().as_u16() < 400 => return Ok(res),
         Ok(res) => res,
-        Err(_) => {
-            return Err(ApiProblem {
-                _type: "httpReqError".into(),
-                detail: Some("Transport error".into()),
-                subproblems: None,
-            });
-        }
+        Err(err) => return Err(req_transport_problem(&err)),
     };
 
     let problem = if req_content_type(&res) == "application/problem+json" {
@@ -82,6 +76,15 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
     };
 
     Err(problem)
+}
+
+/// A request that got no response, and why
+pub(crate) fn req_transport_problem(err: &ureq::Error) -> ApiProblem {
+    ApiProblem {
+        _type: "httpReqError".into(),
+        detail: Some(format!("Transport error: {err}")),
+        subproblems: None,
+    }
 }
 
 /// Extract a header from a response.
@@ -114,4 +117,18 @@ pub(crate) fn req_safe_read_body(res: Response) -> String {
     // even though we did capture the body.
     read.read_to_string(&mut res_body).ok();
     res_body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{req_get, req_handle_error};
+
+    #[test]
+    fn test_transport_errors_say_why() {
+        // Nothing listens there
+        let problem = req_handle_error(req_get("http://127.0.0.1:1/")).unwrap_err();
+        let detail = problem.detail.unwrap();
+        assert!(detail.starts_with("Transport error: "), "{detail}");
+        assert!(detail.len() > "Transport error: ".len(), "{detail}");
+    }
 }
