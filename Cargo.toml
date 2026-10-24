@@ -12,7 +12,7 @@ authors = [
 keywords = ["letsencrypt", "acme"]
 categories = ["web-programming", "api-bindings"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 
 [dependencies]
 base64 = "0.22.1"
