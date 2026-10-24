@@ -1,4 +1,4 @@
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
 use crate::api::ApiProblem;
 
@@ -8,10 +8,10 @@ const TIMEOUT_DURATION: std::time::Duration = std::time::Duration::from_secs(30)
 
 pub(crate) type Response = ureq::http::Response<ureq::Body>;
 
-lazy_static! {
-    /// TLS with the system's OpenSSL and root certificates. Statuses come back as responses,
-    /// and become problems in `req_handle_error`.
-    static ref AGENT: ureq::Agent = ureq::Agent::config_builder()
+/// TLS with the system's OpenSSL and root certificates. Statuses come back as responses,
+/// and become problems in `req_handle_error`.
+static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT_DURATION))
         .http_status_as_error(false)
         .tls_config(
@@ -21,8 +21,8 @@ lazy_static! {
                 .build(),
         )
         .build()
-        .into();
-}
+        .into()
+});
 
 pub(crate) fn req_get(url: &str) -> Result<Response, ureq::Error> {
     let req = AGENT.get(url);
@@ -49,13 +49,7 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
         // ok responses pass through
         Ok(res) if res.status().as_u16() < 400 => return Ok(res),
         Ok(res) => res,
-        Err(_) => {
-            return Err(ApiProblem {
-                _type: "httpReqError".into(),
-                detail: Some("Transport error".into()),
-                subproblems: None,
-            })
-        }
+        Err(err) => return Err(req_transport_problem(&err)),
     };
 
     let problem = if req_content_type(&res) == "application/problem+json" {
@@ -65,8 +59,7 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
             _type: "problemJsonFail".into(),
             detail: Some(format!(
                 "Failed to deserialize application/problem+json ({}) body: {}",
-                e.to_string(),
-                body
+                e, body
             )),
             subproblems: None,
         })
@@ -83,6 +76,29 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
     };
 
     Err(problem)
+}
+
+/// How long the CA asks to wait before asking again, if it says (in seconds: HTTP dates are
+/// ignored)
+pub(crate) fn req_retry_after(res: &Response) -> Option<std::time::Duration> {
+    retry_after(req_header(res, "retry-after")?)
+}
+
+fn retry_after(value: &str) -> Option<std::time::Duration> {
+    value
+        .trim()
+        .parse()
+        .ok()
+        .map(std::time::Duration::from_secs)
+}
+
+/// A request that got no response, and why
+pub(crate) fn req_transport_problem(err: &ureq::Error) -> ApiProblem {
+    ApiProblem {
+        _type: "httpReqError".into(),
+        detail: Some(format!("Transport error: {err}")),
+        subproblems: None,
+    }
 }
 
 /// Extract a header from a response.
@@ -115,4 +131,27 @@ pub(crate) fn req_safe_read_body(res: Response) -> String {
     // even though we did capture the body.
     read.read_to_string(&mut res_body).ok();
     res_body
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{req_get, req_handle_error, retry_after};
+
+    #[test]
+    fn test_retry_after_is_read_in_seconds() {
+        assert_eq!(retry_after("3"), Some(Duration::from_secs(3)));
+        assert_eq!(retry_after(" 120 "), Some(Duration::from_secs(120)));
+        assert_eq!(retry_after("Fri, 31 Dec 1999 23:59:59 GMT"), None);
+    }
+
+    #[test]
+    fn test_transport_errors_say_why() {
+        // Nothing listens there
+        let problem = req_handle_error(req_get("http://127.0.0.1:1/")).unwrap_err();
+        let detail = problem.detail.unwrap();
+        assert!(detail.starts_with("Transport error: "), "{detail}");
+        assert!(detail.len() > "Transport error: ".len(), "{detail}");
+    }
 }

@@ -2,13 +2,16 @@ use openssl::ecdsa::EcdsaSig;
 use openssl::sha::sha256;
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::Result;
 use crate::acc::AcmeKey;
 use crate::jwt::*;
-use crate::req::{req_expect_header, req_handle_error, req_head, req_header, req_post, Response};
+use crate::req::{
+    Response, req_expect_header, req_handle_error, req_head, req_header, req_post,
+    req_transport_problem,
+};
 use crate::util::base64url;
-use crate::Result;
 
 /// JWS payload and nonce handling for requests to the API.
 ///
@@ -119,7 +122,7 @@ impl NoncePool {
 
         if let Some(nonce) = req_header(res, "replay-nonce") {
             trace!("Extract nonce");
-            let mut pool = self.pool.lock().unwrap();
+            let mut pool = self.pool.lock().unwrap_or_else(PoisonError::into_inner);
             pool.push_back(nonce.to_string());
             if pool.len() > 10 {
                 pool.pop_front();
@@ -129,7 +132,7 @@ impl NoncePool {
 
     fn get_nonce(&self) -> Result<String> {
         {
-            let mut pool = self.pool.lock().unwrap();
+            let mut pool = self.pool.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(nonce) = pool.pop_front() {
                 trace!("Use previous nonce");
                 return Ok(nonce);
@@ -140,13 +143,7 @@ impl NoncePool {
 
         let res = match res {
             Ok(res) => res,
-            Err(_) => {
-                return Err(crate::Error::ApiProblem(crate::api::ApiProblem {
-                    _type: "httpReqError".into(),
-                    detail: Some("Transport error".into()),
-                    subproblems: None,
-                }))
-            }
+            Err(err) => return Err(req_transport_problem(&err).into()),
         };
 
         Ok(req_expect_header(&res, "replay-nonce")?)
@@ -159,7 +156,7 @@ fn jws_with_kid<T: Serialize + ?Sized>(
     key: &AcmeKey,
     payload: &T,
 ) -> Result<String> {
-    let protected = JwsProtected::new_kid(key.key_id(), url, nonce);
+    let protected = JwsProtected::new_kid(key.key_id()?, url, nonce);
     jws_with(protected, key, payload)
 }
 
@@ -169,8 +166,7 @@ fn jws_with_jwk<T: Serialize + ?Sized>(
     key: &AcmeKey,
     payload: &T,
 ) -> Result<String> {
-    let jwk: Jwk = key.into();
-    let protected = JwsProtected::new_jwk(jwk, url, nonce);
+    let protected = JwsProtected::new_jwk(key.jwk().clone(), url, nonce);
     jws_with(protected, key, payload)
 }
 
@@ -196,7 +192,7 @@ fn jws_with<T: Serialize + ?Sized>(
 
     let to_sign = format!("{}.{}", protected, payload);
     let digest = sha256(to_sign.as_bytes());
-    let sig = EcdsaSig::sign(&digest, key.private_key()).expect("EcdsaSig::sign");
+    let sig = EcdsaSig::sign(&digest, key.private_key())?;
     let r = sig.r().to_vec();
     let s = sig.s().to_vec();
 

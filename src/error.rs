@@ -20,6 +20,8 @@ pub enum Error {
     Json(serde_json::Error),
     /// std::io error.
     Io(io::Error),
+    /// OpenSSL couldn't read or make a key, a certificate or a signature.
+    Openssl(openssl::error::ErrorStack),
     /// Some other error. Notice that `Error` is
     /// `From<String>` and `From<&str>` and it becomes `Other`.
     Other(String),
@@ -34,6 +36,7 @@ impl fmt::Display for Error {
             Error::Base64Decode(e) => write!(f, "{}", e),
             Error::Json(e) => write!(f, "{}", e),
             Error::Io(e) => write!(f, "{}", e),
+            Error::Openssl(e) => write!(f, "{}", e),
             Error::Other(s) => write!(f, "{}", s),
         }
     }
@@ -54,6 +57,12 @@ impl From<serde_json::Error> for Error {
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Error::Io(e)
+    }
+}
+
+impl From<openssl::error::ErrorStack> for Error {
+    fn from(e: openssl::error::ErrorStack) -> Self {
+        Error::Openssl(e)
     }
 }
 

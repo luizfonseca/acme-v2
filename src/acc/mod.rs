@@ -1,14 +1,14 @@
 //
 use std::sync::Arc;
 
+use crate::Result;
 use crate::api::{ApiAccount, ApiDirectory, ApiIdentifier, ApiOrder, ApiRevocation};
 use crate::cert::Certificate;
 use crate::order::{NewOrder, Order};
-use crate::persist::{Persist, PersistKey, PersistKind};
+use crate::persist::{Persist, PersistKey, PersistKind, read};
 use crate::req::req_expect_header;
 use crate::trans::Transport;
 use crate::util::{base64url, read_json};
-use crate::Result;
 
 mod akey;
 
@@ -64,8 +64,9 @@ impl<P: Persist> Account<P> {
     /// Private key for this account.
     ///
     /// The key is an elliptic curve private key.
-    pub fn acme_private_key_pem(&self) -> String {
-        String::from_utf8(self.inner.transport.acme_key().to_pem()).expect("from_utf8")
+    pub fn acme_private_key_pem(&self) -> Result<String> {
+        let pem = self.inner.transport.acme_key().to_pem()?;
+        Ok(String::from_utf8_lossy(&pem).into_owned())
     }
 
     /// Get an already issued and [downloaded] certificate.
@@ -87,16 +88,12 @@ impl<P: Persist> Account<P> {
         // read primary key
         let pk_key = PersistKey::new(realm, PersistKind::PrivateKey, primary_name);
         debug!("Read private key: {}", pk_key);
-        let private_key = persist
-            .get(&pk_key)?
-            .and_then(|s| String::from_utf8(s).ok());
+        let private_key = read(persist, &pk_key)?.and_then(|s| String::from_utf8(s).ok());
 
         // read certificate
         let pk_crt = PersistKey::new(realm, PersistKind::Certificate, primary_name);
         debug!("Read certificate: {}", pk_crt);
-        let certificate = persist
-            .get(&pk_crt)?
-            .and_then(|s| String::from_utf8(s).ok());
+        let certificate = read(persist, &pk_crt)?.and_then(|s| String::from_utf8(s).ok());
 
         Ok(match (private_key, certificate) {
             // TODO: add chain
@@ -150,7 +147,7 @@ impl<P: Persist> Account<P> {
     /// [`certificate`]: struct.Account.html#method.certificate
     pub fn revoke_certificate(&self, cert: &Certificate, reason: RevocationReason) -> Result<()> {
         // convert to base64url of the DER (which is not PEM).
-        let certificate = base64url(&cert.certificate_der());
+        let certificate = base64url(&cert.certificate_der()?);
 
         let revoc = ApiRevocation {
             certificate,

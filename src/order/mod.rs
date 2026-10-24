@@ -19,15 +19,15 @@
 //! [`CertOrder`]: struct.CertOrder.html
 use openssl::pkey::{self, PKey};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
+use crate::Result;
 use crate::acc::AccountInner;
 use crate::api::{ApiAuth, ApiEmptyString, ApiFinalize, ApiOrder};
-use crate::cert::{create_csr, Certificate};
+use crate::cert::{Certificate, create_csr};
 use crate::persist::{Persist, PersistKey, PersistKind};
-use crate::util::{base64url, read_json};
-use crate::Result;
+use crate::req::req_retry_after;
+use crate::util::{POLL_TIMEOUT, Polled, base64url, poll, read_json};
 
 mod auth;
 
@@ -56,17 +56,28 @@ pub(crate) fn refresh_order<P: Persist>(
     url: String,
     want_status: &'static str,
 ) -> Result<Order<P>> {
+    Ok(refresh_order_waiting(inner, url, want_status)?.0)
+}
+
+/// The order, and how long the CA asks to wait before asking again, if it says
+fn refresh_order_waiting<P: Persist>(
+    inner: &Arc<AccountInner<P>>,
+    url: String,
+    want_status: &'static str,
+) -> Result<(Order<P>, Option<Duration>)> {
     let res = inner.transport.call(&url, &ApiEmptyString)?;
+    let retry_after = req_retry_after(&res);
 
     // our test rig requires the order to be in `want_status`.
     // api_order_of is different for test compilation
     let api_order = api_order_of(res, want_status)?;
 
-    Ok(Order {
+    let order = Order {
         inner: inner.clone(),
         api_order,
         url,
-    })
+    };
+    Ok((order, retry_after))
 }
 
 #[cfg(not(test))]
@@ -198,7 +209,8 @@ impl<P: Persist> CsrOrder<P> {
     ///
     /// Once the CSR has been submitted, the order goes into a `processing` status,
     /// where we must poll until the status changes. The `delay_millis` is the
-    /// amount of time to wait between each poll attempt.
+    /// amount of time to wait between each poll attempt (unless the CA asks for longer, with
+    /// `Retry-After`). It gives up after 5 minutes.
     ///
     /// This is a convenience wrapper that in turn calls the lower level [`finalize_pkey`].
     ///
@@ -215,7 +227,8 @@ impl<P: Persist> CsrOrder<P> {
     ///
     /// Once the CSR has been submitted, the order goes into a `processing` status,
     /// where we must poll until the status changes. The `delay_millis` is the
-    /// amount of time to wait between each poll attempt.
+    /// amount of time to wait between each poll attempt (unless the CA asks for longer, with
+    /// `Retry-After`). It gives up after 5 minutes.
     pub fn finalize_pkey(
         self,
         private_key: PKey<pkey::Private>,
@@ -229,7 +242,7 @@ impl<P: Persist> CsrOrder<P> {
         let csr = create_csr(&private_key, &domains)?;
 
         // this is not the same as PEM.
-        let csr_der = csr.to_der().expect("to_der()");
+        let csr_der = csr.to_der()?;
         let csr_enc = base64url(&csr_der);
         let finalize = ApiFinalize { csr: csr_enc };
 
@@ -244,7 +257,7 @@ impl<P: Persist> CsrOrder<P> {
         // wait for the status to not be processing.
         // valid -> cert is issued
         // invalid -> the whole thing is off
-        let order = wait_for_order_status(&inner, &order_url, delay_millis)?;
+        let order = wait_for_order_status(&inner, &order_url, delay_millis, POLL_TIMEOUT)?;
 
         if !order.api_order.is_status_valid() {
             return Err(format!("Order is in status: {:?}", order.api_order.status).into());
@@ -259,18 +272,23 @@ impl<P: Persist> CsrOrder<P> {
     }
 }
 
+/// Polls the order until it's no longer processing, for up to `timeout`
 fn wait_for_order_status<P: Persist>(
     inner: &Arc<AccountInner<P>>,
     url: &str,
     delay_millis: u64,
+    timeout: Duration,
 ) -> Result<Order<P>> {
-    loop {
-        let order = refresh_order(inner, url.to_string(), "valid")?;
+    poll(Duration::from_millis(delay_millis), timeout, || {
+        let (order, retry_after) = refresh_order_waiting(inner, url.to_string(), "valid")?;
         if !order.api_order.is_status_processing() {
-            return Ok(order);
+            return Ok(Polled::Done(order));
         }
-        thread::sleep(Duration::from_millis(delay_millis));
-    }
+        Ok(Polled::Pending {
+            status: order.api_order.status.clone().unwrap_or_default(),
+            retry_after,
+        })
+    })
 }
 
 /// Order for an issued certificate that is ready to download.
@@ -288,8 +306,13 @@ impl<P: Persist> CertOrder<P> {
     /// [`Account::certificate`]: ../struct.Account.html#method.certificate
     pub fn download_and_save_cert(self) -> Result<Certificate> {
         //
-        let primary_name = self.order.api_order.domains()[0].to_string();
-        let url = self.order.api_order.certificate.expect("certificate url");
+        let domains = self.order.api_order.domains();
+        let primary_name = domains
+            .first()
+            .ok_or("the order has no domain")?
+            .to_string();
+        let url = (self.order.api_order.certificate)
+            .ok_or("the order is valid, but has no certificate to download")?;
         let inner = self.order.inner;
         let realm = &inner.realm[..];
 
@@ -298,7 +321,7 @@ impl<P: Persist> CertOrder<P> {
         // save key and cert into persistence
         let persist = &inner.persist;
         let pk_key = PersistKey::new(realm, PersistKind::PrivateKey, &primary_name);
-        let pkey_pem_bytes = self.private_key.private_key_to_pem_pkcs8().expect("to_pem");
+        let pkey_pem_bytes = self.private_key.private_key_to_pem_pkcs8()?;
         let pkey_pem = String::from_utf8_lossy(&pkey_pem_bytes);
         debug!("Save private key: {}", pk_key);
         persist.put(&pk_key, &pkey_pem_bytes)?;
@@ -347,7 +370,7 @@ mod test {
         let ord = acc.new_order("acmetest.example.com", &[])?;
         // shortcut auth
         let ord = CsrOrder { order: ord.order };
-        let pkey = cert::create_p256_key();
+        let pkey = cert::create_p256_key()?;
         let _ord = ord.finalize_pkey(pkey, 1)?;
         Ok(())
     }
@@ -363,18 +386,19 @@ mod test {
 
         // shortcut auth
         let ord = CsrOrder { order: ord.order };
-        let pkey = cert::create_p256_key();
+        let pkey = cert::create_p256_key()?;
         let ord = ord.finalize_pkey(pkey, 1)?;
 
         let cert = ord.download_and_save_cert()?;
-        assert_eq!("CERT HERE", cert.certificate());
+        assert_eq!(*crate::test::CERTIFICATE, cert.certificate());
         assert!(!cert.private_key().is_empty());
 
         // check that the keys have been persisted
         let cert2 = acc.certificate("acmetest.example.com")?.unwrap();
         assert_eq!(cert.private_key(), cert2.private_key());
         assert_eq!(cert.certificate(), cert2.certificate());
-        assert_eq!(cert.valid_days_left(), 89);
+        // 89 and some, once a second has passed
+        assert!((89..=90).contains(&cert.valid_days_left()?));
 
         Ok(())
     }

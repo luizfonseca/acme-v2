@@ -1,4 +1,4 @@
-use lazy_static::lazy_static;
+use openssl::asn1::Asn1Time;
 use openssl::ec::{Asn1Flag, EcGroup, EcKey};
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
@@ -6,72 +6,64 @@ use openssl::pkey::{self, PKey};
 use openssl::rsa::Rsa;
 use openssl::stack::Stack;
 use openssl::x509::extension::SubjectAlternativeName;
-use openssl::x509::{X509Req, X509ReqBuilder, X509};
-use time::format_description;
+use openssl::x509::{X509, X509Req, X509ReqBuilder};
 
 use crate::Result;
 
-lazy_static! {
-    pub(crate) static ref EC_GROUP_P256: EcGroup = ec_group(Nid::X9_62_PRIME256V1);
-    pub(crate) static ref EC_GROUP_P384: EcGroup = ec_group(Nid::SECP384R1);
-
-    // https://time-rs.github.io/book/api/format-description.html
-    pub(self) static ref TIME_FORMAT: time::format_description::OwnedFormatItem = format_description::parse_owned::<2>(
-      "[month repr:short] [ first [[day padding:none]]  [[day padding:space]] ] [hour padding:zero]:[minute padding:zero]:[second padding:zero] [year] GMT").unwrap();
-}
-
-fn ec_group(nid: Nid) -> EcGroup {
-    let mut g = EcGroup::from_curve_name(nid).expect("EcGroup");
+fn ec_group(nid: Nid) -> Result<EcGroup> {
+    let mut g = EcGroup::from_curve_name(nid)?;
     // this is required for openssl 1.0.x (but not 1.1.x)
     g.set_asn1_flag(Asn1Flag::NAMED_CURVE);
-    g
+    Ok(g)
+}
+
+/// The P-256 curve, of account keys
+pub(crate) fn p256() -> Result<EcGroup> {
+    ec_group(Nid::X9_62_PRIME256V1)
 }
 
 /// Make an RSA private key (from which we can derive a public key).
 ///
 /// This library does not check the number of bits used to create the key pair.
 /// For Let's Encrypt, the bits must be between 2048 and 4096.
-pub fn create_rsa_key(bits: u32) -> PKey<pkey::Private> {
-    let pri_key_rsa = Rsa::generate(bits).expect("Rsa::generate");
-    PKey::from_rsa(pri_key_rsa).expect("from_rsa")
+pub fn create_rsa_key(bits: u32) -> Result<PKey<pkey::Private>> {
+    Ok(PKey::from_rsa(Rsa::generate(bits)?)?)
 }
 
 /// Make a P-256 private key (from which we can derive a public key).
-pub fn create_p256_key() -> PKey<pkey::Private> {
-    let pri_key_ec = EcKey::generate(&*EC_GROUP_P256).expect("EcKey");
-    PKey::from_ec_key(pri_key_ec).expect("from_ec_key")
+pub fn create_p256_key() -> Result<PKey<pkey::Private>> {
+    let group = p256()?;
+    Ok(PKey::from_ec_key(EcKey::generate(&group)?)?)
 }
 
 /// Make a P-384 private key pair (from which we can derive a public key).
-pub fn create_p384_key() -> PKey<pkey::Private> {
-    let pri_key_ec = EcKey::generate(&*EC_GROUP_P384).expect("EcKey");
-    PKey::from_ec_key(pri_key_ec).expect("from_ec_key")
+pub fn create_p384_key() -> Result<PKey<pkey::Private>> {
+    let group = ec_group(Nid::SECP384R1)?;
+    Ok(PKey::from_ec_key(EcKey::generate(&group)?)?)
 }
 
 pub(crate) fn create_csr(pkey: &PKey<pkey::Private>, domains: &[&str]) -> Result<X509Req> {
     //
     // the csr builder
-    let mut req_bld = X509ReqBuilder::new().expect("X509ReqBuilder");
+    let mut req_bld = X509ReqBuilder::new()?;
 
     // set private/public key in builder
-    req_bld.set_pubkey(pkey).expect("set_pubkey");
+    req_bld.set_pubkey(pkey)?;
 
     // set all domains as alt names
-    let mut stack = Stack::new().expect("Stack::new");
+    let mut stack = Stack::new()?;
     let ctx = req_bld.x509v3_context(None);
     let mut an = SubjectAlternativeName::new();
     for d in domains {
         an.dns(d);
     }
 
-    let ext = an.build(&ctx).expect("SubjectAlternativeName::build");
-    stack.push(ext).expect("Stack::push");
-    req_bld.add_extensions(&stack).expect("add_extensions");
+    let ext = an.build(&ctx)?;
+    stack.push(ext)?;
+    req_bld.add_extensions(&stack)?;
 
     // sign it
-    req_bld
-        .sign(pkey, MessageDigest::sha256())
-        .expect("csr_sign");
+    req_bld.sign(pkey, MessageDigest::sha256())?;
 
     // the csr
     Ok(req_bld.build())
@@ -100,9 +92,9 @@ impl Certificate {
     }
 
     /// The private key as DER.
-    pub fn private_key_der(&self) -> Vec<u8> {
-        let pkey = PKey::private_key_from_pem(self.private_key.as_bytes()).expect("from_pem");
-        pkey.private_key_to_der().expect("private_key_to_der")
+    pub fn private_key_der(&self) -> Result<Vec<u8>> {
+        let pkey = PKey::private_key_from_pem(self.private_key.as_bytes())?;
+        Ok(pkey.private_key_to_der()?)
     }
 
     /// The PEM encoded issued certificate.
@@ -115,9 +107,9 @@ impl Certificate {
     }
 
     /// The issued certificate as DER.
-    pub fn certificate_der(&self) -> Vec<u8> {
-        let x509 = X509::from_pem(self.certificate.as_bytes()).expect("from_pem");
-        x509.to_der().expect("to_der")
+    pub fn certificate_der(&self) -> Result<Vec<u8>> {
+        let x509 = X509::from_pem(self.certificate.as_bytes())?;
+        Ok(x509.to_der()?)
     }
 
     /// Inspect the certificate to count the number of (whole) valid days left.
@@ -126,50 +118,62 @@ impl Certificate {
     /// Let's Encrypt sets the validity to 90 days. This function reports 89 days for newly
     /// issued cert, since it counts _whole_ days.
     ///
-    /// It is possible to get negative days for an expired certificate.
-    pub fn valid_days_left(&self) -> i64 {
-        // When running test_download_and_save_cert, the certificate is not a valid x509
-        if cfg!(test) {
-            return 89;
-        }
-
-        // load as x509
-        let x509 = X509::from_pem(self.certificate.as_bytes()).expect("from_pem");
-
-        // convert asn1 time to Tm
-        let not_after = format!("{}", x509.not_after());
-        // Display trait produces this format, which is kinda dumb.
-        // Apr 19 08:48:46 2019 GMT
-        let expires = parse_date(&not_after);
-        let dur = expires - time::OffsetDateTime::now_utc();
-
-        dur.whole_days()
+    /// It is possible to get negative days for an expired certificate, and an error for a
+    /// certificate that can't be read.
+    pub fn valid_days_left(&self) -> Result<i64> {
+        let x509 = X509::from_pem(self.certificate.as_bytes())?;
+        let left = Asn1Time::days_from_now(0)?.diff(x509.not_after())?;
+        Ok(i64::from(left.days))
     }
-}
-
-fn parse_date(s: &str) -> time::OffsetDateTime {
-    time::PrimitiveDateTime::parse(s, &TIME_FORMAT)
-        .expect(format!("OffsetDateTime: '{}'", s).as_str())
-        .assume_utc()
 }
 
 #[cfg(test)]
-mod test {
-    use time::macros::datetime;
-
+pub(crate) mod test {
     use super::*;
 
-    #[test]
-    fn test_parse_date() {
-        let x = parse_date("May 3 07:40:15 2019 GMT");
+    /// A self-signed certificate, valid until `not_after`
+    pub(crate) fn certificate_until(not_after: &Asn1Time) -> String {
+        let key = create_p256_key().unwrap();
+        let mut name = openssl::x509::X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "acmetest.example.com")
+            .unwrap();
+        let name = name.build();
+        let mut builder = X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(&key).unwrap();
+        builder
+            .set_not_before(&Asn1Time::from_unix(0).unwrap())
+            .unwrap();
+        builder.set_not_after(not_after).unwrap();
+        builder.sign(&key, MessageDigest::sha256()).unwrap();
+        String::from_utf8(builder.build().to_pem().unwrap()).unwrap()
+    }
 
-        assert_eq!(x, datetime!(2019-05-03 07:40:15 +00:00));
+    fn certificate(pem: &str) -> Certificate {
+        Certificate::new(String::new(), pem.to_string(), vec![])
     }
 
     #[test]
-    fn test_parse_date_extra_space() {
-        let x = parse_date("Sep  6 23:30:55 2024 GMT");
+    fn test_days_left_are_whole_days() {
+        let in_90_days = certificate_until(&Asn1Time::days_from_now(90).unwrap());
+        // 89 and some, once a second has passed
+        assert!((89..=90).contains(&certificate(&in_90_days).valid_days_left().unwrap()));
+    }
 
-        assert_eq!(x, datetime!(2024-09-06 23:30:55 +00:00));
+    #[test]
+    fn test_expired_certificates_have_negative_days_left() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let two_days_ago = certificate_until(&Asn1Time::from_unix(now - 2 * 86_400).unwrap());
+        assert!((-2..=-1).contains(&certificate(&two_days_ago).valid_days_left().unwrap()));
+    }
+
+    #[test]
+    fn test_unreadable_certificates_are_errors() {
+        assert!(certificate("CERT HERE").valid_days_left().is_err());
     }
 }
