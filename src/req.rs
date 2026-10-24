@@ -78,6 +78,20 @@ pub(crate) fn req_handle_error(res: Result<Response, ureq::Error>) -> ReqResult<
     Err(problem)
 }
 
+/// How long the CA asks to wait before asking again, if it says (in seconds: HTTP dates are
+/// ignored)
+pub(crate) fn req_retry_after(res: &Response) -> Option<std::time::Duration> {
+    retry_after(req_header(res, "retry-after")?)
+}
+
+fn retry_after(value: &str) -> Option<std::time::Duration> {
+    value
+        .trim()
+        .parse()
+        .ok()
+        .map(std::time::Duration::from_secs)
+}
+
 /// A request that got no response, and why
 pub(crate) fn req_transport_problem(err: &ureq::Error) -> ApiProblem {
     ApiProblem {
@@ -121,7 +135,16 @@ pub(crate) fn req_safe_read_body(res: Response) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{req_get, req_handle_error};
+    use std::time::Duration;
+
+    use super::{req_get, req_handle_error, retry_after};
+
+    #[test]
+    fn test_retry_after_is_read_in_seconds() {
+        assert_eq!(retry_after("3"), Some(Duration::from_secs(3)));
+        assert_eq!(retry_after(" 120 "), Some(Duration::from_secs(120)));
+        assert_eq!(retry_after("Fri, 31 Dec 1999 23:59:59 GMT"), None);
+    }
 
     #[test]
     fn test_transport_errors_say_why() {

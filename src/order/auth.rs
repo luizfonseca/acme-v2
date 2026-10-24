@@ -1,7 +1,6 @@
 //
 use openssl::sha::sha256;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use crate::Result;
@@ -9,7 +8,8 @@ use crate::acc::AccountInner;
 use crate::acc::AcmeKey;
 use crate::api::{ApiAuth, ApiChallenge, ApiEmptyObject, ApiEmptyString};
 use crate::persist::Persist;
-use crate::util::{base64url, read_json};
+use crate::req::req_retry_after;
+use crate::util::{POLL_TIMEOUT, Polled, base64url, poll, read_json};
 
 /// An authorization ([ownership proof]) for a domain name.
 ///
@@ -226,12 +226,15 @@ impl<P: Persist, A> Challenge<P, A> {
     ///
     /// The user must first update the DNS record or HTTP web server depending
     /// on the type challenge being validated.
+    ///
+    /// Polls every `delay_millis` (or as long as the CA asks, with `Retry-After`), and gives up
+    /// after 5 minutes.
     pub fn validate(self, delay_millis: u64) -> Result<()> {
         let url_chall = &self.api_challenge.url;
         let res = self.inner.transport.call(url_chall, &ApiEmptyObject)?;
         let _: ApiChallenge = read_json(res)?;
 
-        let auth = wait_for_auth_status(&self.inner, &self.auth_url, delay_millis)?;
+        let auth = wait_for_auth_status(&self.inner, &self.auth_url, delay_millis, POLL_TIMEOUT)?;
 
         if !auth.is_status_valid() {
             let error = auth
@@ -268,20 +271,25 @@ fn key_authorization(token: &str, key: &AcmeKey, extra_sha256: bool) -> String {
     }
 }
 
+/// Polls the authorization until it's no longer pending, for up to `timeout`
 fn wait_for_auth_status<P: Persist>(
     inner: &Arc<AccountInner<P>>,
     auth_url: &str,
     delay_millis: u64,
+    timeout: Duration,
 ) -> Result<ApiAuth> {
-    let auth = loop {
+    poll(Duration::from_millis(delay_millis), timeout, || {
         let res = inner.transport.call(auth_url, &ApiEmptyString)?;
+        let retry_after = req_retry_after(&res);
         let auth: ApiAuth = read_json(res)?;
         if !auth.is_status_pending() {
-            break auth;
+            return Ok(Polled::Done(auth));
         }
-        thread::sleep(Duration::from_millis(delay_millis));
-    };
-    Ok(auth)
+        Ok(Polled::Pending {
+            status: auth.status.unwrap_or_default(),
+            retry_after,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -331,6 +339,22 @@ mod test {
             "no http-01 challenge for acmetest.algesten.se"
         );
         assert!(wildcard.tls_alpn_challenge().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_authorizations_stuck_pending_are_errors() -> Result<()> {
+        let server = crate::test::with_directory_server();
+        let url = DirectoryUrl::Other(&server.dir_url);
+        let dir = Directory::from_url(MemoryPersist::new(), url)?;
+        let acc = dir.account("foo@bar.com")?;
+        let ord = acc.new_order("acmetest.example.com", &[])?;
+        let auth = &ord.authorizations()?[0];
+
+        // The test server's authorization is always pending
+        let timeout = std::time::Duration::from_millis(50);
+        let err = super::wait_for_auth_status(&auth.inner, &auth.auth_url, 1, timeout).err();
+        assert_eq!(err.unwrap().to_string(), "still pending after 50ms");
         Ok(())
     }
 }
