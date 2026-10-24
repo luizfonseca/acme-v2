@@ -70,14 +70,14 @@ pub(crate) fn refresh_order<P: Persist>(
 }
 
 #[cfg(not(test))]
-fn api_order_of(res: ureq::Response, _want_status: &str) -> Result<ApiOrder> {
+fn api_order_of(res: crate::req::Response, _want_status: &str) -> Result<ApiOrder> {
     read_json(res)
 }
 
 #[cfg(test)]
 // our test rig requires the order to be in `want_status`
-fn api_order_of(res: ureq::Response, want_status: &str) -> Result<ApiOrder> {
-    let s = res.into_string()?;
+fn api_order_of(res: crate::req::Response, want_status: &str) -> Result<ApiOrder> {
+    let s = crate::req::req_safe_read_body(res);
     let b = s.replace("<STATUS>", want_status);
     let api_order: ApiOrder = serde_json::from_str(&b)?;
     Ok(api_order)
@@ -303,7 +303,8 @@ impl<P: Persist> CertOrder<P> {
         debug!("Save private key: {}", pk_key);
         persist.put(&pk_key, &pkey_pem_bytes)?;
 
-        let cert = res.into_string()?;
+        let mut cert = String::new();
+        std::io::Read::read_to_string(&mut res.into_body().into_reader(), &mut cert)?;
         let pk_crt = PersistKey::new(realm, PersistKind::Certificate, &primary_name);
         debug!("Save certificate: {}", pk_crt);
         persist.put(&pk_crt, cert.as_bytes())?;
