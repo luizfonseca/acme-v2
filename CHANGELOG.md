@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.4](https://github.com/luizfonseca/acme-v2/compare/v0.9.3...v0.9.4) (2026-10-24)
+
+
+### Bug Fixes
+
+* use OpenSSL and the system's root certificates for TLS, with ureq 3 ([#6](https://github.com/luizfonseca/acme-v2/issues/6)) ([a4d0c4e](https://github.com/luizfonseca/acme-v2/commit/a4d0c4ed10e9444d85b15a594a3e60ab34a0e672))
+
 ## [0.9.3](https://github.com/luizfonseca/acme-v2/compare/v0.9.2...v0.9.3) (2024-10-19)
 
 
