@@ -5,7 +5,7 @@ use crate::Result;
 use crate::api::{ApiAccount, ApiDirectory, ApiIdentifier, ApiOrder, ApiRevocation};
 use crate::cert::Certificate;
 use crate::order::{NewOrder, Order};
-use crate::persist::{Persist, PersistKey, PersistKind};
+use crate::persist::{Persist, PersistKey, PersistKind, read};
 use crate::req::req_expect_header;
 use crate::trans::Transport;
 use crate::util::{base64url, read_json};
@@ -88,16 +88,12 @@ impl<P: Persist> Account<P> {
         // read primary key
         let pk_key = PersistKey::new(realm, PersistKind::PrivateKey, primary_name);
         debug!("Read private key: {}", pk_key);
-        let private_key = persist
-            .get(&pk_key)?
-            .and_then(|s| String::from_utf8(s).ok());
+        let private_key = read(persist, &pk_key)?.and_then(|s| String::from_utf8(s).ok());
 
         // read certificate
         let pk_crt = PersistKey::new(realm, PersistKind::Certificate, primary_name);
         debug!("Read certificate: {}", pk_crt);
-        let certificate = persist
-            .get(&pk_crt)?
-            .and_then(|s| String::from_utf8(s).ok());
+        let certificate = read(persist, &pk_crt)?.and_then(|s| String::from_utf8(s).ok());
 
         Ok(match (private_key, certificate) {
             // TODO: add chain

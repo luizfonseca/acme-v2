@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::acc::AcmeKey;
 use crate::api::{ApiAccount, ApiDirectory};
-use crate::persist::{Persist, PersistKey, PersistKind};
+use crate::persist::{Persist, PersistKey, PersistKind, read};
 use crate::req::{req_expect_header, req_get, req_handle_error};
 use crate::trans::{NoncePool, Transport};
 use crate::util::read_json;
@@ -102,7 +102,7 @@ impl<P: Persist> Directory<P> {
 
         // Get the key from a saved PEM, or from creating a new
         let mut is_new = false;
-        let pem = self.persist().get(&pem_key)?;
+        let pem = read(self.persist(), &pem_key)?;
         let acme_key = if let Some(pem) = pem {
             // we got a persisted private key. read it.
             debug!("Read persisted acme account key");
