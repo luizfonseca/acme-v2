@@ -367,14 +367,15 @@ mod test {
         let ord = ord.finalize_pkey(pkey, 1)?;
 
         let cert = ord.download_and_save_cert()?;
-        assert_eq!("CERT HERE", cert.certificate());
+        assert_eq!(*crate::test::CERTIFICATE, cert.certificate());
         assert!(!cert.private_key().is_empty());
 
         // check that the keys have been persisted
         let cert2 = acc.certificate("acmetest.example.com")?.unwrap();
         assert_eq!(cert.private_key(), cert2.private_key());
         assert_eq!(cert.certificate(), cert2.certificate());
-        assert_eq!(cert.valid_days_left(), 89);
+        // 89 and some, once a second has passed
+        assert!((89..=90).contains(&cert.valid_days_left()?));
 
         Ok(())
     }

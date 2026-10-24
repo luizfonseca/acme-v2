@@ -20,6 +20,11 @@ impl Drop for TestServer {
     }
 }
 
+/// The certificate issued: self-signed, valid for 90 days
+pub static CERTIFICATE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    crate::cert::test::certificate_until(&openssl::asn1::Asn1Time::days_from_now(90).unwrap())
+});
+
 /// A response: its status, headers and body
 struct Response {
     status: u16,
@@ -204,7 +209,7 @@ fn post_finalize(_url: &str) -> Response {
 }
 
 fn post_certificate(_url: &str) -> Response {
-    Response::new(200, "text/plain", "CERT HERE")
+    Response::new(200, "application/pem-certificate-chain", &CERTIFICATE)
         .with_additional_header("Link", "link-to-chain-cert")
 }
 
