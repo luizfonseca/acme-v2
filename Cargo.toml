@@ -25,4 +25,3 @@ ureq = { version = "3", default-features = false, features = ["native-tls-no-def
 
 [dev-dependencies]
 env_logger = { version = "0.11", default-features = false }
-rouille = "3.6"

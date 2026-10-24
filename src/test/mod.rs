@@ -1,23 +1,75 @@
-use rouille::{Request, Response, Server};
+//! An ACME server for tests, answering each request with a canned response
 
-use std::sync::mpsc::Sender;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 pub struct TestServer {
     pub dir_url: String,
-    shutdown: Option<Sender<()>>,
-    #[allow(dead_code)]
-    handle: thread::JoinHandle<()>,
+    address: std::net::SocketAddr,
+    stopped: Arc<AtomicBool>,
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.shutdown.take().unwrap().send(()).ok();
+        self.stopped.store(true, Ordering::Relaxed);
+        // Wakes the listener up, to see it's stopped
+        TcpStream::connect(self.address).ok();
+    }
+}
+
+/// A response: its status, headers and body
+struct Response {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+impl Response {
+    fn new(status: u16, content_type: &str, body: &str) -> Self {
+        Response {
+            status,
+            headers: vec![("Content-Type".into(), content_type.into())],
+            body: body.into(),
+        }
+    }
+
+    fn empty(status: u16) -> Self {
+        Response {
+            status,
+            headers: vec![],
+            body: String::new(),
+        }
+    }
+
+    fn with_status_code(mut self, status: u16) -> Self {
+        self.status = status;
+        self
+    }
+
+    fn with_additional_header(mut self, name: &str, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    fn write(&self, stream: &mut TcpStream) -> std::io::Result<()> {
+        let mut head = format!("HTTP/1.1 {} X\r\n", self.status);
+        for (name, value) in &self.headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str(&format!(
+            "Content-Length: {}\r\nConnection: close\r\n\r\n",
+            self.body.len()
+        ));
+        stream.write_all(head.as_bytes())?;
+        stream.write_all(self.body.as_bytes())
     }
 }
 
 fn json_response(body: &str) -> Response {
-    Response::from_data("application/jose+json", body).with_status_code(200)
+    Response::new(200, "application/jose+json", body)
 }
 
 fn get_directory(url: &str) -> Response {
@@ -40,7 +92,7 @@ fn get_directory(url: &str) -> Response {
 }
 
 fn head_new_nonce() -> Response {
-    Response::empty_204().with_additional_header(
+    Response::empty(204).with_additional_header(
         "replay-nonce",
         "8_uBBV3N2DBRJczhoiB46ugJKUkUHxGzVe6xIMpjHFM",
     )
@@ -148,20 +200,46 @@ fn post_authz(url: &str) -> Response {
 }
 
 fn post_finalize(_url: &str) -> Response {
-    Response::empty_204().with_status_code(200)
+    Response::empty(200)
 }
 
 fn post_certificate(_url: &str) -> Response {
-    Response::text("CERT HERE")
-        .with_status_code(200)
+    Response::new(200, "text/plain", "CERT HERE")
         .with_additional_header("Link", "link-to-chain-cert")
 }
 
-fn route_request(req: &Request) -> Response {
-    println!("Called with {:?}", req);
-    let base_url = &format!("http://{}", &req.header("Host").unwrap_or("default"));
+/// The method and path of a request, and its `Host` header. Its body is read and dropped.
+fn read_request(stream: &TcpStream) -> std::io::Result<(String, String, String)> {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let mut parts = line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
 
-    match (req.method(), req.url().as_str()) {
+    let (mut host, mut length) = (String::new(), 0);
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header)?;
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        let (name, value) = header.split_once(':').unwrap_or((header, ""));
+        match name.to_ascii_lowercase().as_str() {
+            "host" => host = value.trim().to_string(),
+            "content-length" => length = value.trim().parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    reader.take(length).read_to_end(&mut vec![])?;
+    Ok((method, path, host))
+}
+
+fn route_request(method: &str, path: &str, host: &str) -> Response {
+    let base_url = &format!("http://{host}");
+
+    match (method, path) {
         ("GET", "/directory") => get_directory(base_url),
         ("HEAD", "/acme/new-nonce") => head_new_nonce(),
         ("POST", "/acme/new-acct") => post_new_acct(base_url),
@@ -170,22 +248,36 @@ fn route_request(req: &Request) -> Response {
         ("POST", "/acme/authz/YTqpYUthlVfwBncUufE8IRWLMSRqcSs") => post_authz(base_url),
         ("POST", "/acme/finalize/7738992/18234324") => post_finalize(base_url),
         ("POST", "/acme/cert/fae41c070f967713109028") => post_certificate(base_url),
-        (_, _) => Response::empty_404(),
+        (_, _) => Response::empty(404),
     }
 }
 
+fn serve(mut stream: TcpStream) -> std::io::Result<()> {
+    let (method, path, host) = read_request(&stream)?;
+    route_request(&method, &path, &host).write(&mut stream)
+}
+
 pub fn with_directory_server() -> TestServer {
-    let server = Server::new("127.0.0.1:0", |request| route_request(request)).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
 
-    let base_url = format!("http://127.0.0.1:{}", server.server_addr().port());
-    let dir_url = format!("{}/directory", base_url);
-
-    let (handle, sender) = server.stoppable();
+    let stop = stopped.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            if let Ok(stream) = stream {
+                thread::spawn(move || serve(stream));
+            }
+        }
+    });
 
     TestServer {
-        dir_url,
-        shutdown: Some(sender),
-        handle,
+        dir_url: format!("http://{address}/directory"),
+        address,
+        stopped,
     }
 }
 
